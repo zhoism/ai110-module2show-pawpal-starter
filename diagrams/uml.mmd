@@ -1,15 +1,132 @@
 classDiagram
-    %% Replace the placeholders below with your actual classes, attributes, methods, and relationships.
-    %% Keep this file updated so it matches your final implementation.
+    %% PawPal+ — pet care planning assistant
+    %% Domain model: an Owner has Pets, each Pet has care Tasks.
+    %% A Scheduler turns a list of Tasks + Constraints into an explained DailyPlan.
+    %% Times are int minutes-from-midnight (08:00 -> 480); to_minutes()/fmt() convert at the UI edge.
+    %% Mirrors pawpal_system.py — keep in sync (see CLAUDE.md / README.md).
 
-    class ClassName {
-        +type attribute
-        +method() returnType
+    direction LR
+
+    class Owner {
+        +str name
+        +Preferences preferences
+        +List~Pet~ pets
+        +add_pet(pet: Pet) void
+        +add_task(pet: Pet, task: Task) void
+        +all_tasks() List~Task~
     }
 
-    class AnotherClass {
-        +type attribute
-        +method() returnType
+    class Preferences {
+        +int day_start
+        +int day_end
+        +int available_minutes
+        +List~str~ avoid_times
+        +bool explain_plan
     }
 
-    ClassName --> AnotherClass : relationship
+    class Pet {
+        +str name
+        +Species species
+        +List~Task~ tasks
+        +add_task(task: Task) void
+        +remove_task(task_id: str) void
+    }
+
+    class Task {
+        +str id
+        +str title
+        +int duration_minutes
+        +Priority priority
+        +int preferred_time
+        +Recurrence recurrence
+        +bool is_fixed
+        +score() float
+        +fits_in(remaining_minutes: int) bool
+        +from_dict(data: dict)$ Task
+    }
+
+    class Constraints {
+        +int day_start
+        +int day_end
+        +int max_tasks
+        +SortStrategy strategy
+        +int available_minutes
+        +remaining_minutes(used: int) int
+        +from_preferences(prefs: Preferences)$ Constraints
+    }
+
+    class Scheduler {
+        +generate(tasks: List~Task~, constraints: Constraints) DailyPlan
+        -sort_tasks(tasks: List~Task~, constraints: Constraints) List~Task~
+        -select_tasks(tasks: List~Task~, constraints: Constraints) tuple
+        -assign_times(tasks: List~Task~, constraints: Constraints) List~ScheduledTask~
+        -resolve_conflicts(items: List~ScheduledTask~) List~ScheduledTask~
+    }
+
+    class DailyPlan {
+        +date day
+        +List~ScheduledTask~ items
+        +List~Task~ skipped
+        +int total_minutes
+        +add_item(item: ScheduledTask) void
+        +explain() str
+        +to_dict() dict
+    }
+
+    class ScheduledTask {
+        +Task task
+        +int start_time
+        +int end_time
+        +str reason
+        +duration() int
+        +overlaps(other: ScheduledTask) bool
+    }
+
+    class Priority {
+        <<enumeration>>
+        LOW
+        MEDIUM
+        HIGH
+        +from_label(label: str)$ Priority
+        +label() str
+    }
+
+    class Species {
+        <<enumeration>>
+        DOG
+        CAT
+        OTHER
+    }
+
+    class Recurrence {
+        <<enumeration>>
+        ONCE
+        DAILY
+        WEEKLY
+    }
+
+    class SortStrategy {
+        <<enumeration>>
+        PRIORITY_FIRST
+        SHORTEST_FIRST
+        PREFERRED_TIME
+    }
+
+    %% Relationships
+    Owner "1" *-- "1" Preferences : has
+    Owner "1" o-- "0..*" Pet : owns
+    Pet "1" o-- "0..*" Task : needs
+    Task --> Priority : has
+    Task --> Recurrence : repeats
+    Pet --> Species : is a
+
+    %% Scheduler is stateless: reads tasks, uses constraints (built from preferences), produces a plan.
+    Scheduler ..> Task : reads
+    Scheduler ..> Constraints : uses
+    Scheduler ..> DailyPlan : produces
+    Constraints ..> Preferences : built from
+    Constraints --> SortStrategy : uses
+
+    DailyPlan "1" *-- "0..*" ScheduledTask : contains
+    DailyPlan "1" o-- "0..*" Task : skips
+    ScheduledTask "1" --> "1" Task : wraps
