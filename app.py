@@ -9,6 +9,7 @@ from pawpal_system import (
     Scheduler,
     Species,
     Task,
+    fmt,
 )
 
 st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="centered")
@@ -96,19 +97,32 @@ if owner.pets:
             st.success(f"Added '{task_title}' for {pet.name}.")
 
     if owner.all_tasks():
+        # filter by pet, then show the list sorted by time (untimed tasks last)
+        pet_filter = st.selectbox("Show tasks for", ["All pets"] + [p.name for p in owner.pets])
+        visible = (
+            owner.all_tasks() if pet_filter == "All pets" else owner.tasks_for(pet_filter)
+        )
+        pet_of = {t.id: p.name for p in owner.pets for t in p.tasks}
         st.table(
             [
                 {
-                    "pet": pet.name,
+                    "time": fmt(t.preferred_time) if t.preferred_time is not None else "—",
+                    "pet": pet_of[t.id],
                     "task": t.title,
                     "minutes": t.duration_minutes,
                     "priority": t.priority.label,
                     "fixed": "yes" if t.is_fixed else "",
                 }
-                for pet in owner.pets
-                for t in pet.tasks
+                for t in Scheduler().sort_by_time(visible)
             ]
         )
+
+        # live conflict check: warn the owner as soon as two fixed times collide
+        conflicts = Scheduler().detect_preferred_time_conflicts(owner.all_tasks())
+        for conflict in conflicts:
+            st.warning(f"⚠️ Time conflict: {conflict}")
+        if not conflicts:
+            st.success("No time conflicts in your task list.")
 else:
     st.caption("Add a pet first, then attach tasks to it.")
 
@@ -136,6 +150,12 @@ if st.button("Generate schedule"):
                     for item in plan.to_dict()["items"]
                 ]
             )
+        # conflicts the scheduler had to resolve — shown per conflict so the owner
+        # can see exactly which two tasks collided and reschedule one of them
+        for warning in plan.warnings:
+            st.warning(f"⚠️ {warning} — the later task was moved; pick a new time if that doesn't work.")
+        if plan.items and not plan.warnings:
+            st.success(f"Scheduled {len(plan.items)} tasks with no conflicts.")
         if plan.skipped:
             st.warning(
                 "Skipped: "

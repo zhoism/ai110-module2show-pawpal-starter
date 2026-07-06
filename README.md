@@ -2,6 +2,29 @@
 
 You are building **PawPal+**, a Streamlit app that helps a pet owner plan care tasks for their pet.
 
+## ✨ Features
+
+- **Plans that explain themselves** — every scheduled slot says why it's there ("placed at 08:00, highest priority", "fixed at 15:00", "shifted to avoid a conflict"), and every task that got cut says why it didn't make it (out of time, already done, not due yet).
+- **Priority-aware scheduling** — tasks get packed into however much free time the owner actually has, most important first. There are also shortest-first and by-time modes.
+- **Sorted by time** — the task list shows the day in order; tasks without a set time go last.
+- **Fixed appointments** — a 15:00 vet visit stays at 15:00, and flexible tasks pack around it.
+- **Conflict warnings** — if two tasks want the same time, you get a warning naming both (nothing crashes), and the scheduler shifts the later one out of the way automatically.
+- **Daily/weekly repeats** — finish a recurring task and the next one gets created on its own, and it won't sneak into today's plan early.
+- **Filter views** — see tasks per pet, or split by done vs. not done.
+- **Testable core** — all the logic lives in one plain Python file with zero UI code in it, covered by 89 tests.
+
+## 🧱 How it's built
+
+Everything lives in `pawpal_system.py`, split into "the stuff" and "the brain":
+
+- **Owner** — the user. Holds their pets and their preferences (day window, free minutes), and can hand over every task across all pets in one list.
+- **Pet** — a name, a species, and its own list of tasks, with methods to add, remove, filter, and complete them.
+- **Task** — one care item: what it is, how long it takes, its priority, done or not, and optionally a fixed time or a daily/weekly repeat.
+- **Scheduler** — the brain. Stateless: give it tasks and constraints, it gives back a plan. Sorting, filtering, conflict handling, and time assignment all happen here.
+- **DailyPlan / ScheduledTask** — the result. Ordered slots that each remember why they were placed, skipped tasks with reasons, and any conflict warnings.
+
+`app.py` (Streamlit) and `main.py` (terminal demo) are both thin layers on top — they collect input, call the scheduler, and show the result.
+
 ## Scenario
 
 A busy pet owner needs help staying consistent with pet care. They want an assistant that can:
@@ -85,10 +108,10 @@ python -m pytest
 
 **What the tests cover** (89 tests across four files):
 
-- `tests/test_models.py` — domain model units: time helpers (`"HH:MM"` ↔ minutes), `Priority` ordering and labels, `Task.fits_in`/`score`/`from_dict`, `ScheduledTask` duration/overlap, `Constraints` capacity, and `Owner`/`Pet` task management.
-- `tests/test_scheduler.py` — scheduling behavior: priority/shortest-first ordering with deterministic tie-breaks, capacity filtering with recorded skip reasons, back-to-back non-overlapping slots inside the day window, fixed-time placement, `explain()`/`to_dict()` output, and degenerate inputs (empty list, zero minutes, inverted windows, oversized tasks).
-- `tests/test_algorithms.py` — the algorithmic features: `sort_by_time`, filtering by pet/status, recurring-task respawn (+1/+7 days), and conflict detection (including the long-task-spans-several-slots regression).
-- `tests/test_pawpal.py` — core verification and edge cases: sorting is chronological, completing a daily task creates tomorrow's instance (chained ids stay unique), duplicate times are flagged, zero-duration windows don't conflict, pets with no tasks, all-tasks-done inputs, and future-due tasks are deferred to their own day.
+- `tests/test_models.py` — the building blocks: time conversion, priority ordering, tasks knowing whether they fit in the remaining time, and owners/pets managing their task lists.
+- `tests/test_scheduler.py` — the scheduling behavior: ordering by priority, never blowing the time budget, no overlapping slots, everything staying inside the day window, fixed times being honored, readable output, and weird inputs like an empty list or a day that ends before it starts.
+- `tests/test_algorithms.py` — the smarter features: sorting by time, filtering by pet and status, recurring tasks creating their next occurrence, and conflict detection (including the tricky case where one long task overlaps several later ones).
+- `tests/test_pawpal.py` — core checks and edge cases: the list comes out in chronological order, finishing a daily task creates tomorrow's copy (with unique ids), duplicate times get flagged, pets with no tasks don't break anything, and tasks due tomorrow stay out of today's plan.
 
 Sample test output:
 
@@ -108,7 +131,7 @@ tests/test_scheduler.py .............................                    [100%]
 
 **Confidence Level: ★★★★☆ (4/5)**
 
-The core scheduling pipeline (sorting, capacity selection, time assignment, conflict handling, recurrence) is covered by behavior-level tests that were written before the implementation, and the test process caught a real bug (recurring tasks due tomorrow used to land in today's plan). One star held back because a few known rough edges remain untested or undecided: `Task.from_dict` can produce duplicate ids for same-titled tasks, fixed appointments can lose to `max_tasks` ordering, and the Streamlit UI layer itself has no automated tests.
+The whole pipeline — sorting, picking what fits, assigning times, conflicts, recurrence — is covered by tests, most of which were written before the code they test. The process even caught a real bug (recurring tasks due tomorrow used to land in today's plan). Holding back one star for the known rough edges: two tasks with the same name can collide behind the scenes, a fixed appointment can lose its spot to the task cap, and the UI layer itself only has a basic smoke check.
 
 ## 📐 Smarter Scheduling
 
@@ -125,10 +148,10 @@ The core scheduling pipeline (sorting, capacity selection, time assignment, conf
 
 | Feature | Method(s) | Notes |
 |---------|-----------|-------|
-| Task sorting | `Scheduler.sort_by_time()`, `Scheduler._sort_tasks()` | `sort_by_time` orders tasks by `preferred_time` (untimed tasks sink to the end, stable). `_sort_tasks` powers `generate()` with three strategies: `PRIORITY_FIRST` (priority ↓, duration ↑, input order), `SHORTEST_FIRST`, `PREFERRED_TIME`. |
-| Filtering | `Pet.pending_tasks()` / `Pet.completed_tasks()`, `Owner.tasks_for(pet_name)`, `Owner.tasks_by_status(completed)` | Filter by completion status per pet or across all pets, and by pet name (case-insensitive; unknown pet returns `[]`). `generate()` also skips completed tasks and anything that doesn't fit, each with a recorded reason (`"already completed"`, `"no time left"`, `"max_tasks reached"`, …). |
-| Conflict handling | `Scheduler.detect_conflicts()`, `Scheduler.detect_preferred_time_conflicts()`, `Scheduler._resolve_conflicts()` | Detection returns warning strings (never crashes): overlapping scheduled slots, or fixed tasks whose requested windows collide. Resolution shifts the flexible/later slot after the collision and rewrites its reason (`"shifted to 15:30 … (wanted 15:00)"`); slots pushed outside the day window are re-skipped. Warnings surface in `DailyPlan.warnings` and `explain()`. |
-| Recurring tasks | `Task.mark_complete()`, `Task.next_occurrence()`, `Pet.complete_task(task_id)` | Completing a `DAILY`/`WEEKLY` task auto-creates the next occurrence (`due_date + 1 day` or `+ 7 days` via `timedelta`); `Pet.complete_task` appends it to the pet's list. `ONCE` tasks spawn nothing, and double-completion is a guarded no-op. |
+| Task sorting | `Scheduler.sort_by_time()`, plus the strategies inside `generate()` | Sorts the task list by time, with untimed tasks at the end. Scheduling itself can run priority-first, shortest-first, or by preferred time — ties always break the same way so results are repeatable. |
+| Filtering | `Pet.pending_tasks()` / `completed_tasks()`, `Owner.tasks_for()`, `Owner.tasks_by_status()` | View tasks per pet or by done/not-done. The scheduler also filters on its own — completed tasks, tasks that don't fit, and tasks not due yet all get skipped, each with a reason attached. |
+| Conflict handling | `Scheduler.detect_conflicts()`, `detect_preferred_time_conflicts()`, `_resolve_conflicts()` | Collisions come back as warning messages instead of crashes. When two fixed tasks want the same time, the later one gets shifted and the plan says so; anything pushed outside the day window gets skipped instead. |
+| Recurring tasks | `Task.mark_complete()`, `next_occurrence()`, `Pet.complete_task()` | Finishing a daily or weekly task creates the next one automatically (+1 or +7 days). One-time tasks don't respawn, completing twice doesn't duplicate, and tomorrow's copy stays out of today's plan. |
 
 
 
@@ -136,10 +159,63 @@ The core scheduling pipeline (sorting, capacity selection, time assignment, conf
 
 Describe your app in numbered steps so a reader can follow along without watching a video:
 
-1. <!-- Describe this step -->
-2. <!-- Describe this step -->
-3. <!-- Describe this step -->
-4. <!-- Describe this step -->
-5. <!-- Add more steps as needed -->
+<!-- Walkthrough below — edit freely. -->
+
+**What you can do in the app** (`streamlit run app.py`): enter your name, set your day window and free minutes in the sidebar, add pets, add tasks to each pet (with duration, priority, and an optional fixed time), browse the task list sorted by time with a per-pet filter, and generate the day's schedule. If two tasks ever want the same time, a warning shows up right away — you don't have to hit generate to find out.
+
+**Example workflow:**
+
+1. Enter an owner name and set the sidebar to a day from 08:00 to 20:00 with 150 free minutes.
+2. Add two pets — say Biscuit the dog and Mochi the cat. They stick around as you click through the app, so you can keep adding to them.
+3. Add tasks to each pet: a high-priority morning walk, feeding, and a vet appointment locked to 15:00. The table re-sorts by time as you go, with untimed tasks at the bottom.
+4. Add a grooming task also locked to 15:00 — a warning pops up immediately naming both colliding tasks, before you've even scheduled anything.
+5. Hit **Generate schedule**. You get the plan as a table, a note that the later of the two 15:00 tasks was moved (with a suggestion to pick a new time if that doesn't work), any skipped tasks with their reasons, and a "Why this plan?" section with the full explanation.
+
+**What the scheduler is doing under the hood:** packing from the start of the day in priority order, pinning fixed appointments, catching and resolving the time conflict (and being upfront about it), cutting whatever doesn't fit in 150 minutes, and keeping tomorrow's recurring tasks out of today's plan.
+
+**Sample CLI output** from `python main.py` (same logic, just run from the terminal):
+
+```
+=== Tasks sorted by time (untimed last) =========================
+  08:00  Breakfast (Biscuit)  (10 min)
+  12:30  Midday play (Mochi)  (20 min)
+  15:00  Vet appointment (Biscuit)  (45 min)
+  15:00  Grooming (Mochi)  (30 min)
+  18:00  Evening walk (Biscuit)  (30 min)
+  --:--  Litter box cleanup (Mochi)  (15 min)
+
+=== Filtering ===================================================
+  Biscuit's tasks: ['Evening walk (Biscuit)', 'Breakfast (Biscuit)', 'Vet appointment (Biscuit)']
+  Mochi's tasks:   ['Midday play (Mochi)', 'Litter box cleanup (Mochi)', 'Grooming (Mochi)']
+
+=== Recurring task: complete daily breakfast ====================
+  Completed 't2'; auto-created next occurrence: 'Breakfast (Biscuit)' due 2026-07-07 (id=t2~2026-07-07)
+  Pending:   ['Evening walk (Biscuit)', 'Vet appointment (Biscuit)', 'Breakfast (Biscuit)', 'Midday play (Mochi)', 'Litter box cleanup (Mochi)', 'Grooming (Mochi)']
+  Completed: ['Breakfast (Biscuit)']
+
+=== Conflict detection (before scheduling) ======================
+  ⚠️  'Vet appointment (Biscuit)' (15:00–15:45) overlaps 'Grooming (Mochi)' starting 15:00
+
+=== Today's Schedule ============================================
+Jordan | pets: Biscuit (dog), Mochi (cat) | 2026-07-06
+
+Daily plan:
+  08:00–08:30 — Evening walk (Biscuit) (30 min) [priority: high]
+      ↳ placed at 08:00 via priority_first (priority: high)
+  08:30–08:45 — Litter box cleanup (Mochi) (15 min) [priority: medium]
+      ↳ placed at 08:30 via priority_first (priority: medium)
+  08:45–09:05 — Midday play (Mochi) (20 min) [priority: low]
+      ↳ placed at 08:45 via priority_first (priority: low)
+  15:00–15:30 — Grooming (Mochi) (30 min) [priority: medium]
+      ↳ fixed at 15:00 (priority: medium)
+  15:30–16:15 — Vet appointment (Biscuit) (45 min) [priority: medium]
+      ↳ shifted to 15:30 to avoid a conflict (wanted 15:00)
+Total scheduled: 140 min.
+Skipped:
+  - Breakfast (Biscuit) (already completed)
+  - Breakfast (Biscuit) (not due until 2026-07-07)
+Warnings:
+  ! 'Grooming (Mochi)' (15:00–15:30) overlaps 'Vet appointment (Biscuit)' (15:00–15:45)
+```
 
 **Screenshot or video** *(optional)*: <!-- Insert a screenshot or link to a demo video here -->

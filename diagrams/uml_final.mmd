@@ -1,9 +1,7 @@
 classDiagram
-    %% PawPal+ — pet care planning assistant
-    %% Domain model: an Owner has Pets, each Pet has care Tasks.
-    %% A Scheduler turns a list of Tasks + Constraints into an explained DailyPlan.
+    %% PawPal+ — FINAL system architecture (matches pawpal_system.py as shipped)
     %% Times are int minutes-from-midnight (08:00 -> 480); to_minutes()/fmt() convert at the UI edge.
-    %% Mirrors pawpal_system.py — keep in sync (see CLAUDE.md / README.md).
+    %% Scheduler is stateless; app.py builds Constraints from Preferences and renders the DailyPlan.
 
     direction LR
 
