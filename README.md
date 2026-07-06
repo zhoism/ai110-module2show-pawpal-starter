@@ -75,11 +75,40 @@ pytest
 pytest --cov
 ```
 
+<!-- Test documentation below — edit freely. -->
+
+Run the suite with:
+
+```bash
+python -m pytest
+```
+
+**What the tests cover** (89 tests across four files):
+
+- `tests/test_models.py` — domain model units: time helpers (`"HH:MM"` ↔ minutes), `Priority` ordering and labels, `Task.fits_in`/`score`/`from_dict`, `ScheduledTask` duration/overlap, `Constraints` capacity, and `Owner`/`Pet` task management.
+- `tests/test_scheduler.py` — scheduling behavior: priority/shortest-first ordering with deterministic tie-breaks, capacity filtering with recorded skip reasons, back-to-back non-overlapping slots inside the day window, fixed-time placement, `explain()`/`to_dict()` output, and degenerate inputs (empty list, zero minutes, inverted windows, oversized tasks).
+- `tests/test_algorithms.py` — the algorithmic features: `sort_by_time`, filtering by pet/status, recurring-task respawn (+1/+7 days), and conflict detection (including the long-task-spans-several-slots regression).
+- `tests/test_pawpal.py` — core verification and edge cases: sorting is chronological, completing a daily task creates tomorrow's instance (chained ids stay unique), duplicate times are flagged, zero-duration windows don't conflict, pets with no tasks, all-tasks-done inputs, and future-due tasks are deferred to their own day.
+
 Sample test output:
 
 ```
-# Paste your pytest output here
+============================= test session starts ==============================
+platform darwin -- Python 3.13.12, pytest-9.1.1, pluggy-1.6.0
+rootdir: pawpal-starter
+collected 89 items
+
+tests/test_algorithms.py ....................                            [ 22%]
+tests/test_models.py ............................                        [ 53%]
+tests/test_pawpal.py ............                                        [ 67%]
+tests/test_scheduler.py .............................                    [100%]
+
+============================== 89 passed in 0.05s ==============================
 ```
+
+**Confidence Level: ★★★★☆ (4/5)**
+
+The core scheduling pipeline (sorting, capacity selection, time assignment, conflict handling, recurrence) is covered by behavior-level tests that were written before the implementation, and the test process caught a real bug (recurring tasks due tomorrow used to land in today's plan). One star held back because a few known rough edges remain untested or undecided: `Task.from_dict` can produce duplicate ids for same-titled tasks, fixed appointments can lose to `max_tasks` ordering, and the Streamlit UI layer itself has no automated tests.
 
 ## 📐 Smarter Scheduling
 

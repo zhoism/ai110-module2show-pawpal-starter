@@ -357,15 +357,21 @@ class Scheduler:
     ) -> DailyPlan:
         """Build the daily plan: sort, select within capacity, assign times.
 
-        ``day`` is stamped onto the plan (so ``to_dict()`` / ``explain()`` can name
-        the date and future recurrence logic has a day to branch on). Any slot that
-        ends after ``day_end`` (e.g. a fixed task placed too late) is re-skipped
-        rather than emitted (review findings M5 + L2)."""
+        ``day`` (default: today) is stamped onto the plan and used to defer tasks
+        whose ``due_date`` is later — a respawned recurring task due tomorrow is
+        skipped with a "not due until" reason instead of scheduled today. Any slot
+        that ends after ``day_end`` (e.g. a fixed task placed too late) is
+        re-skipped rather than emitted (review findings M5 + L2)."""
         plan = DailyPlan(day=day)
-        pending = [t for t in tasks if not t.completed]
+        plan_day = day or date.today()
+        pending = []
         for task in tasks:
             if task.completed:
                 plan.skip(task, "already completed")
+            elif task.due_date is not None and task.due_date > plan_day:
+                plan.skip(task, f"not due until {task.due_date.isoformat()}")
+            else:
+                pending.append(task)
         ordered = self._sort_tasks(pending, constraints)
         kept, skipped = self._select_tasks(ordered, constraints)
         raw_items = self._assign_times(kept, constraints)
