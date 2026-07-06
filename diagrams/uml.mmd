@@ -14,6 +14,8 @@ classDiagram
         +add_pet(pet: Pet) void
         +add_task(pet: Pet, task: Task) void
         +all_tasks() List~Task~
+        +tasks_for(pet_name: str) List~Task~
+        +tasks_by_status(completed: bool) List~Task~
     }
 
     class Preferences {
@@ -30,6 +32,9 @@ classDiagram
         +List~Task~ tasks
         +add_task(task: Task) void
         +remove_task(task_id: str) void
+        +pending_tasks() List~Task~
+        +completed_tasks() List~Task~
+        +complete_task(task_id: str) Task
     }
 
     class Task {
@@ -41,7 +46,9 @@ classDiagram
         +Recurrence recurrence
         +bool is_fixed
         +bool completed
-        +mark_complete() void
+        +date due_date
+        +mark_complete() Task
+        +next_occurrence() Task
         +score() float
         +fits_in(remaining_minutes: int) bool
         +from_dict(data: dict)$ Task
@@ -59,6 +66,9 @@ classDiagram
 
     class Scheduler {
         +generate(tasks: List~Task~, constraints: Constraints, day: date) DailyPlan
+        +sort_by_time(tasks: List~Task~) List~Task~
+        +detect_conflicts(items: List~ScheduledTask~) List~str~
+        +detect_preferred_time_conflicts(tasks: List~Task~) List~str~
         -sort_tasks(tasks: List~Task~, constraints: Constraints) List~Task~
         -select_tasks(tasks: List~Task~, constraints: Constraints) tuple
         -assign_times(tasks: List~Task~, constraints: Constraints) List~ScheduledTask~
@@ -71,6 +81,7 @@ classDiagram
         +List~ScheduledTask~ items
         +List~Task~ skipped
         +Dict~str_str~ skipped_reasons
+        +List~str~ warnings
         +int total_minutes
         +add_item(item: ScheduledTask) void
         +skip(task: Task, reason: str) void

@@ -15,8 +15,8 @@ Design notes
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import date
+from dataclasses import dataclass, field, replace
+from datetime import date, timedelta
 from enum import Enum, IntEnum
 
 
@@ -104,10 +104,24 @@ class Task:
     recurrence: Recurrence = Recurrence.ONCE
     is_fixed: bool = False                 # must run at preferred_time if True
     completed: bool = False                # done for today
+    due_date: date | None = None           # when this occurrence is due
 
-    def mark_complete(self) -> None:
-        """Mark this task as done."""
+    def mark_complete(self) -> "Task | None":
+        """Mark this task done; return the auto-created next occurrence (None if non-recurring)."""
+        if self.completed:
+            return None  # already done — don't spawn a duplicate occurrence
         self.completed = True
+        return self.next_occurrence()
+
+    def next_occurrence(self) -> "Task | None":
+        """Next instance for DAILY/WEEKLY tasks (due +1/+7 days); None for ONCE."""
+        if self.recurrence is Recurrence.ONCE:
+            return None
+        step = timedelta(days=1 if self.recurrence is Recurrence.DAILY else 7)
+        next_due = (self.due_date or date.today()) + step
+        return replace(
+            self, id=f"{self.id}~{next_due.isoformat()}", completed=False, due_date=next_due
+        )
 
     def score(self) -> float:
         """Ranking score; higher = scheduled sooner. Driven by priority."""
@@ -127,6 +141,11 @@ class Task:
             priority=Priority.from_label(str(data.get("priority", "medium"))),
             preferred_time=data.get("preferred_time"),
             is_fixed=bool(data.get("is_fixed", False)),
+            recurrence=Recurrence(data.get("recurrence", "once")),
+            completed=bool(data.get("completed", False)),
+            due_date=(
+                date.fromisoformat(data["due_date"]) if data.get("due_date") else None
+            ),
         )
 
 
@@ -145,6 +164,24 @@ class Pet:
     def remove_task(self, task_id: str) -> None:
         """Remove the task with the given id from this pet (no-op if absent)."""
         self.tasks = [t for t in self.tasks if t.id != task_id]
+
+    def pending_tasks(self) -> list[Task]:
+        """Tasks not yet completed."""
+        return [t for t in self.tasks if not t.completed]
+
+    def completed_tasks(self) -> list[Task]:
+        """Tasks already completed."""
+        return [t for t in self.tasks if t.completed]
+
+    def complete_task(self, task_id: str) -> Task | None:
+        """Mark a task done; auto-add and return the next occurrence if it recurs."""
+        for task in self.tasks:
+            if task.id == task_id:
+                next_task = task.mark_complete()
+                if next_task is not None:
+                    self.tasks.append(next_task)
+                return next_task
+        return None
 
 
 @dataclass
@@ -166,6 +203,19 @@ class Owner:
     def all_tasks(self) -> list[Task]:
         """Flatten every task across all of this owner's pets."""
         return [task for pet in self.pets for task in pet.tasks]
+
+    def tasks_for(self, pet_name: str) -> list[Task]:
+        """Tasks for the named pet (case-insensitive); [] if no such pet."""
+        return [
+            task
+            for pet in self.pets
+            if pet.name.lower() == pet_name.lower()
+            for task in pet.tasks
+        ]
+
+    def tasks_by_status(self, completed: bool) -> list[Task]:
+        """All tasks across pets filtered by completion status."""
+        return [t for t in self.all_tasks() if t.completed == completed]
 
 
 @dataclass
@@ -230,6 +280,7 @@ class DailyPlan:
     items: list[ScheduledTask] = field(default_factory=list)
     skipped: list[Task] = field(default_factory=list)
     skipped_reasons: dict[str, str] = field(default_factory=dict)  # task.id -> why
+    warnings: list[str] = field(default_factory=list)              # e.g. conflicts
     total_minutes: int = 0
 
     def add_item(self, item: ScheduledTask) -> None:
@@ -264,6 +315,10 @@ class DailyPlan:
             for task in self.skipped:
                 reason = self.skipped_reasons.get(task.id, "no reason given")
                 lines.append(f"  - {task.title} ({reason})")
+        if self.warnings:
+            lines.append("Warnings:")
+            for warning in self.warnings:
+                lines.append(f"  ! {warning}")
         return "\n".join(lines)
 
     def to_dict(self) -> dict:
@@ -285,6 +340,7 @@ class DailyPlan:
                 {"title": t.title, "reason": self.skipped_reasons.get(t.id, "")}
                 for t in self.skipped
             ],
+            "warnings": list(self.warnings),
             "total_minutes": self.total_minutes,
         }
 
@@ -306,17 +362,76 @@ class Scheduler:
         ends after ``day_end`` (e.g. a fixed task placed too late) is re-skipped
         rather than emitted (review findings M5 + L2)."""
         plan = DailyPlan(day=day)
-        ordered = self._sort_tasks(tasks, constraints)
+        pending = [t for t in tasks if not t.completed]
+        for task in tasks:
+            if task.completed:
+                plan.skip(task, "already completed")
+        ordered = self._sort_tasks(pending, constraints)
         kept, skipped = self._select_tasks(ordered, constraints)
-        items = self._resolve_conflicts(self._assign_times(kept, constraints))
+        raw_items = self._assign_times(kept, constraints)
+        plan.warnings.extend(self.detect_conflicts(raw_items))
+        items = self._resolve_conflicts(raw_items)
         for item in items:
             if item.end_time > constraints.day_end:
                 plan.skip(item.task, "pushed past day end")
+            elif item.start_time < constraints.day_start:
+                plan.skip(item.task, "before day start")
             else:
                 plan.add_item(item)
         for task, reason in skipped:
             plan.skip(task, reason)
         return plan
+
+    def sort_by_time(self, tasks: list[Task]) -> list[Task]:
+        """Return tasks sorted by preferred_time (untimed tasks last, input order kept)."""
+        return sorted(
+            tasks,
+            key=lambda t: t.preferred_time if t.preferred_time is not None else self.UNSET_TIME,
+        )
+
+    def detect_conflicts(self, items: list[ScheduledTask]) -> list[str]:
+        """Warning messages for overlapping slots (empty list if clean).
+
+        Sweeps in start order tracking the slot whose window reaches furthest,
+        so a long slot spanning several later ones is reported against each."""
+        warnings: list[str] = []
+        reach: ScheduledTask | None = None  # slot extending furthest so far
+        for item in sorted(items, key=lambda i: i.start_time):
+            if reach is not None and reach.overlaps(item):
+                warnings.append(
+                    f"'{reach.task.title}' ({fmt(reach.start_time)}–{fmt(reach.end_time)}) "
+                    f"overlaps '{item.task.title}' ({fmt(item.start_time)}–{fmt(item.end_time)})"
+                )
+            if reach is None or item.end_time > reach.end_time:
+                reach = item
+        return warnings
+
+    def detect_preferred_time_conflicts(self, tasks: list[Task]) -> list[str]:
+        """Warnings for tasks whose requested time windows collide, before scheduling.
+
+        Only pending tasks with a ``preferred_time`` are considered (a completed
+        task can't conflict); windows are [preferred_time, preferred_time +
+        duration). Same furthest-reach sweep as ``detect_conflicts``. Returns
+        messages, never raises."""
+        warnings: list[str] = []
+        reach: Task | None = None  # window extending furthest so far
+        timed = sorted(
+            (t for t in tasks if t.preferred_time is not None and not t.completed),
+            key=lambda t: t.preferred_time,
+        )
+        for task in timed:
+            if reach is not None and reach.preferred_time + reach.duration_minutes > task.preferred_time:
+                warnings.append(
+                    f"'{reach.title}' ({fmt(reach.preferred_time)}–"
+                    f"{fmt(reach.preferred_time + reach.duration_minutes)}) overlaps "
+                    f"'{task.title}' starting {fmt(task.preferred_time)}"
+                )
+            if reach is None or (
+                task.preferred_time + task.duration_minutes
+                > reach.preferred_time + reach.duration_minutes
+            ):
+                reach = task
+        return warnings
 
     def _sort_tasks(self, tasks: list[Task], constraints: Constraints) -> list[Task]:
         """Order candidate tasks per ``constraints.strategy`` (deterministic).
@@ -426,7 +541,11 @@ class Scheduler:
             if cursor is not None and item.start_time < cursor:
                 shift = cursor - item.start_time
                 item = ScheduledTask(
-                    item.task, item.start_time + shift, item.end_time + shift, item.reason
+                    item.task,
+                    item.start_time + shift,
+                    item.end_time + shift,
+                    f"shifted to {fmt(item.start_time + shift)} to avoid a conflict "
+                    f"(wanted {fmt(item.start_time)})",
                 )
             cursor = item.end_time
             resolved.append(item)

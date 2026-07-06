@@ -83,14 +83,12 @@ Sample test output:
 
 ## 📐 Smarter Scheduling
 
-> Fill in once you've implemented scheduling logic.
-
 | Feature | Method(s) | Notes |
 |---------|-----------|-------|
-| Task sorting | | e.g., by priority, duration |
-| Filtering | | e.g., skip tasks if time runs out |
-| Conflict handling | | e.g., overlapping time slots |
-| Recurring tasks | | e.g., daily vs. weekly |
+| Task sorting | `Scheduler.sort_by_time()`, `Scheduler._sort_tasks()` | `sort_by_time` orders tasks by `preferred_time` (untimed tasks sink to the end, stable). `_sort_tasks` powers `generate()` with three strategies: `PRIORITY_FIRST` (priority ↓, duration ↑, input order), `SHORTEST_FIRST`, `PREFERRED_TIME`. |
+| Filtering | `Pet.pending_tasks()` / `Pet.completed_tasks()`, `Owner.tasks_for(pet_name)`, `Owner.tasks_by_status(completed)` | Filter by completion status per pet or across all pets, and by pet name (case-insensitive; unknown pet returns `[]`). `generate()` also skips completed tasks and anything that doesn't fit, each with a recorded reason (`"already completed"`, `"no time left"`, `"max_tasks reached"`, …). |
+| Conflict handling | `Scheduler.detect_conflicts()`, `Scheduler.detect_preferred_time_conflicts()`, `Scheduler._resolve_conflicts()` | Detection returns warning strings (never crashes): overlapping scheduled slots, or fixed tasks whose requested windows collide. Resolution shifts the flexible/later slot after the collision and rewrites its reason (`"shifted to 15:30 … (wanted 15:00)"`); slots pushed outside the day window are re-skipped. Warnings surface in `DailyPlan.warnings` and `explain()`. |
+| Recurring tasks | `Task.mark_complete()`, `Task.next_occurrence()`, `Pet.complete_task(task_id)` | Completing a `DAILY`/`WEEKLY` task auto-creates the next occurrence (`due_date + 1 day` or `+ 7 days` via `timedelta`); `Pet.complete_task` appends it to the pet's list. `ONCE` tasks spawn nothing, and double-completion is a guarded no-op. |
 
 ## 📸 Demo Walkthrough
 

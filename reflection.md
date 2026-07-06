@@ -100,8 +100,25 @@ Every change is covered by a new test (57 passing, up from 51).
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+**Tradeoff 1 — sweep-based conflict detection reports one warning per later
+task, not every colliding pair.** My first version compared only *adjacent*
+tasks after sorting by start time. When I asked the AI to review it, it found a
+real false negative: a 2-hour task starting at 09:00 overlaps tasks at both
+09:30 and 10:00, but the adjacent-pair check only reported the first. I adopted
+its fix — an O(n log n) sweep that tracks the window reaching furthest so far —
+because it was a correctness bug, not a style preference, and the replacement
+was no harder to read. The remaining (deliberate) tradeoff: in a pile-up the
+sweep reports each later task against the *longest* earlier window rather than
+enumerating every O(n²) pair. For a warning message meant to prompt a human to
+fix their day, one clear warning per affected task is more useful than an
+exhaustive pair list.
+
+**Tradeoff 2 — greedy selection over optimal packing.** When time is tight, the
+scheduler fills leftover gaps with whatever still fits, so a short low-priority
+task can make the plan while a long high-priority one is skipped. A knapsack
+solver would pack "optimally," but greedy maximizes tasks completed, runs
+instantly, and its behavior is predictable enough to explain to the user — which
+matters more in a care app than squeezing out optimal minutes.
 
 ---
 
