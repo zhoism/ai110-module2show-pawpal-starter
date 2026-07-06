@@ -40,6 +40,8 @@ classDiagram
         +int preferred_time
         +Recurrence recurrence
         +bool is_fixed
+        +bool completed
+        +mark_complete() void
         +score() float
         +fits_in(remaining_minutes: int) bool
         +from_dict(data: dict)$ Task
@@ -56,10 +58,11 @@ classDiagram
     }
 
     class Scheduler {
-        +generate(tasks: List~Task~, constraints: Constraints) DailyPlan
+        +generate(tasks: List~Task~, constraints: Constraints, day: date) DailyPlan
         -sort_tasks(tasks: List~Task~, constraints: Constraints) List~Task~
         -select_tasks(tasks: List~Task~, constraints: Constraints) tuple
         -assign_times(tasks: List~Task~, constraints: Constraints) List~ScheduledTask~
+        -earliest_free(start: int, duration: int, busy: list)$ int
         -resolve_conflicts(items: List~ScheduledTask~) List~ScheduledTask~
     }
 
@@ -67,8 +70,10 @@ classDiagram
         +date day
         +List~ScheduledTask~ items
         +List~Task~ skipped
+        +Dict~str_str~ skipped_reasons
         +int total_minutes
         +add_item(item: ScheduledTask) void
+        +skip(task: Task, reason: str) void
         +explain() str
         +to_dict() dict
     }
